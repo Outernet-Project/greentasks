@@ -22,13 +22,10 @@ setup(
         'gevent',
     ],
     classifiers=[
-        'Development Status :: 3 - Alpha',
-        'Topic :: Applicaton',
-        'Framework :: Bottle',
-        'Environment :: Web Environment',
+        'Development Status :: 4 - Beta',
+        'Topic :: Utilities',
         'License :: OSI Approved :: GNU General Public License v3 (GPLv3)',
         'Programming Language :: Python :: 2.7',
-        'Programming Language :: Python :: 3.3',
         'Programming Language :: Python :: 3.4',
     ],
 )
