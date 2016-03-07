@@ -1,0 +1,2 @@
+recursive-include greentasks *
+recursive-exclude tests *
