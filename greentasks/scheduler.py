@@ -6,6 +6,22 @@ import gevent
 
 
 class TaskScheduler(object):
+    """
+    A very simple task scheduler built on top of gevent.
+
+    It allows scheduling of periodic, one-off delayed and one-off ordered tasks.
+
+    Periodic tasks will run repeatedly after their execution in the specified
+    amount of time.
+
+    One-off delayed tasks are executed only once after the specified delay has
+    passed.
+
+    One-off ordered tasks are put into a queue and are executed in the same
+    order they were scheduled. The queue is processed in fixed intervals which
+    is specified by the ``consume_tasks_delay`` parameter in the constructor of
+    the scheduler. In each wakeup, exactly one task will be processed.
+    """
     QUEUED = 'QUEUED'
     PROCESSING = 'PROCESSING'
     NOT_FOUND = 'NOT_FOUND'
@@ -17,9 +33,15 @@ class TaskScheduler(object):
         self._async(self._consume_tasks_delay, self._consume)
 
     def _generate_task_id(self):
+        """
+        Return a unique string that can be used as an ID for tasks.
+        """
         return uuid.uuid4().hex
 
     def get_status(self, task_id):
+        """
+        Return the status of the task identified by the passed in ``task_id``.
+        """
         if task_id in self._queue:
             return self.QUEUED
         if task_id == self.current_task:
@@ -27,9 +49,17 @@ class TaskScheduler(object):
         return self.NOT_FOUND
 
     def _async(self, delay, fn, *args, **kwargs):
+        """
+        Schedule a function with the passed in parameters to be executed
+        asynchronously by gevent.
+        """
         return gevent.spawn_later(delay, fn, *args, **kwargs)
 
     def _execute(self, task_id, fn, args, kwargs):
+        """
+        Execute the passed in task, silencing any exceptions that it might
+        raise while logging them.
+        """
         self.current_task = task_id
         try:
             fn(*args, **kwargs)
@@ -39,10 +69,18 @@ class TaskScheduler(object):
             self.current_task = None
 
     def _periodic(self, task_id, fn, args, kwargs, delay):
+        """
+        Execute a period task through py:meth:`~TaskScheduler._execute` and
+        reschedule it automatically for the specified period.
+        """
         self._execute(task_id, fn, args, kwargs)
         self._async(delay, self._periodic, task_id, fn, args, kwargs, delay)
 
     def _consume(self):
+        """
+        Execute a single task from the queue, and reschedule consuming of the
+        queue in py:attr:`~_consume_tasks_delay`.
+        """
         try:
             (task_id, task) = self._queue.popitem(last=False)
         except KeyError:
@@ -53,7 +91,8 @@ class TaskScheduler(object):
             self._async(self._consume_tasks_delay, self._consume)
 
     def schedule(self, fn, args=None, kwargs=None, delay=None, periodic=False):
-        """Schedules a task for execution.
+        """
+        Schedule a task for execution.
 
         If `delay` is not specified, the task will be put into a queue and
         honor the existing order of scheduled tasks, being executed only after
