@@ -1,15 +1,17 @@
-import collections
+import inspect
 import logging
-import uuid
 
-import gevent
+from gevent import spawn_later
+from gevent.queue import Queue, Empty as QueueEmpty
+
+from .tasks import PackagedTask, Task
 
 
 class TaskScheduler(object):
     """
     A very simple task scheduler built on top of gevent.
 
-    It allows scheduling of periodic, one-off delayed and one-off ordered tasks.
+    Allows scheduling of periodic, one-off delayed and one-off ordered tasks.
 
     Periodic tasks will run repeatedly after their execution in the specified
     amount of time.
@@ -22,59 +24,59 @@ class TaskScheduler(object):
     is specified by the ``consume_tasks_delay`` parameter in the constructor of
     the scheduler. In each wakeup, exactly one task will be processed.
     """
-    QUEUED = 'QUEUED'
-    PROCESSING = 'PROCESSING'
-    NOT_FOUND = 'NOT_FOUND'
+    #: Wrapper class enclosing all the data needed for a single task
+    packaged_task_class = PackagedTask
+
+    #: Base class used to implement the actual task logic
+    base_task_class = Task
 
     def __init__(self, consume_tasks_delay=1):
-        self._queue = collections.OrderedDict()
-        self.current_task = None
+        self._queue = Queue()
         self._consume_tasks_delay = consume_tasks_delay
         self._async(self._consume_tasks_delay, self._consume)
-
-    def _generate_task_id(self):
-        """
-        Return a unique string that can be used as an ID for tasks.
-        """
-        return uuid.uuid4().hex
-
-    def get_status(self, task_id):
-        """
-        Return the status of the task identified by the passed in ``task_id``.
-        """
-        if task_id in self._queue:
-            return self.QUEUED
-        if task_id == self.current_task:
-            return self.PROCESSING
-        return self.NOT_FOUND
 
     def _async(self, delay, fn, *args, **kwargs):
         """
         Schedule a function with the passed in parameters to be executed
         asynchronously by gevent.
         """
-        return gevent.spawn_later(delay, fn, *args, **kwargs)
+        return spawn_later(delay, fn, *args, **kwargs)
 
-    def _execute(self, task_id, fn, args, kwargs):
+    def _execute(self, packaged_task):
         """
-        Execute the passed in task, silencing any exceptions that it might
-        raise while logging them.
+        Delegate execution of ``packaged_task`` to py:meth:`~PackageTask.run`,
+        which handles the invocation of appropriate callbacks and errbacks and
+        the resolving of the future object.
+
+        The return value is forwarded as is, which is the task instance itself,
+        unless instantiation failed for some reason.
         """
-        self.current_task = task_id
+        return packaged_task.run()
+
+    def _periodic(self, packaged_task):
+        """
+        Execute a periodic task through py:meth:`~TaskScheduler._execute` and
+        reschedule it automatically for the specified ``delay``.
+        """
+        task_instance = self._execute(packaged_task)
+        if task_instance is None:
+            # task instantiation probably failed, so it cannot be repeated
+            return
+        # attempt retrieving the ``delay`` which indicates in which amount of
+        # time should the task run again
         try:
-            fn(*args, **kwargs)
+            delay = task_instance.get_delay()
         except Exception:
-            logging.exception("Task execution failed.")
-        finally:
-            self.current_task = None
-
-    def _periodic(self, task_id, fn, args, kwargs, delay):
-        """
-        Execute a period task through py:meth:`~TaskScheduler._execute` and
-        reschedule it automatically for the specified period.
-        """
-        self._execute(task_id, fn, args, kwargs)
-        self._async(delay, self._periodic, task_id, fn, args, kwargs, delay)
+            logging.exception("Task[%s][%s] `get_delay` failed, no further "
+                              "rescheduling will take place.",
+                              packaged_task.id,
+                              packaged_task.name)
+        else:
+            if delay is None:
+                # task does not wish to be rescheduled again
+                return
+            # task needs to be rescheduled again
+            self._async(delay, self._periodic, packaged_task)
 
     def _consume(self):
         """
@@ -82,52 +84,61 @@ class TaskScheduler(object):
         queue in py:attr:`~_consume_tasks_delay`.
         """
         try:
-            (task_id, task) = self._queue.popitem(last=False)
-        except KeyError:
+            packaged_task = self._queue.get_nowait()
+        except QueueEmpty:
             pass  # no task in the queue
         else:
-            self._execute(task_id, *task)
+            self._execute(packaged_task)
         finally:
             self._async(self._consume_tasks_delay, self._consume)
 
-    def schedule(self, fn, args=None, kwargs=None, delay=None, periodic=False):
+    def schedule(self, task, args=None, kwargs=None, callback=None,
+                 errback=None, delay=None, periodic=False):
         """
-        Schedule a task for execution.
+        Schedule a task for execution and return the task object for it.
 
-        If `delay` is not specified, the task will be put into a queue and
+        If ``delay`` is not specified, the task will be put into a queue and
         honor the existing order of scheduled tasks, being executed only after
         the tasks scheduled prior to it are completed.
 
-        If `delay` is specified, the task will be scheduled to run NOT BEFORE
+        If ``delay`` is specified, the task will be scheduled to run NOT BEFORE
         the specified amount of seconds, not following any particular order,
         but there is no guarantee that it will run in exactly that time.
 
-        The `periodic` flag has effect only on tasks that specified a `delay`,
-        and those tasks will be rescheduled automatically for the same `delay`
-        every time after they are executed.
+        The ``periodic`` flag has effect only on tasks which specified a
+        ``delay``, and those tasks will be rescheduled automatically for the
+        same ``delay`` every time after they are executed.
 
-        :param fn:        Function to execute
-        :param args:      Tuple containing positional arguments for `fn`
-        :param kwargs:    Dict containing keyword arguments for `fn`
-        :param delay:     Int - execute `fn` in `delay` seconds
-        :param periodic:  Boolean flag indicating if `fn` is a repeating task
+        :param task:      Callable to execute
+        :param args:      Tuple containing positional arguments for ``task``
+        :param kwargs:    Dict containing keyword arguments for ``task``
+        :param callback:  Function to invoke with return value of ``task``
+        :param errback:   Function to invoke with exception if ``task`` fails
+        :param delay:     Int - amount of seconds to execute ``task`` in
+        :param periodic:  Boolean flag indicating if ``task`` is repeatable
         """
-        args = args or tuple()
-        kwargs = kwargs or dict()
-        task_id = self._generate_task_id()
-        if delay is None:
-            self._queue[task_id] = (fn, args, kwargs)
+        if not self.base_task_class.is_descendant(task):
+            # convert the passed in callable into a subclass of py:class:`Task`
+            task = self.base_task_class.from_callable(task,
+                                                      delay=delay,
+                                                      periodic=periodic)
+        # package task with all of it's arguments
+        packaged_task = self.packaged_task_class(task,
+                                                 args=args,
+                                                 kwargs=kwargs,
+                                                 callback=callback,
+                                                 errback=errback)
+        if packaged_task.delay is None:
+            # schedule an ordered, one-off task
+            self._queue.put(packaged_task)
+            # early return with packaged task object to simplify flow
+            return packaged_task
+        # async task, order does not matter
+        if packaged_task.periodic:
+            # schedule a period task
+            self._async(packaged_task.delay, self._periodic, packaged_task)
         else:
-            # async task, order does not matter
-            if periodic:
-                self._async(delay,
-                            self._periodic,
-                            task_id,
-                            fn,
-                            args,
-                            kwargs,
-                            delay)
-            else:
-                self._async(delay, self._execute, task_id, fn, args, kwargs)
-
-        return task_id
+            # schedule a one-off task
+            self._async(packaged_task.delay, self._execute, packaged_task)
+        # return packaged task object in both cases
+        return packaged_task
