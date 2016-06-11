@@ -116,17 +116,14 @@ class TaskScheduler(object):
         :param delay:     Int - amount of seconds to execute ``task`` in
         :param periodic:  Boolean flag indicating if ``task`` is repeatable
         """
-        if not self.base_task_class.is_descendant(task):
-            # convert the passed in callable into a subclass of py:class:`Task`
-            task = self.base_task_class.from_callable(task,
-                                                      delay=delay,
-                                                      periodic=periodic)
         # package task with all of it's arguments
         packaged_task = self.packaged_task_class(task,
                                                  args=args,
                                                  kwargs=kwargs,
                                                  callback=callback,
-                                                 errback=errback)
+                                                 errback=errback,
+                                                 delay=delay,
+                                                 periodic=periodic)
         if packaged_task.delay is None:
             # schedule an ordered, one-off task
             self._queue.put(packaged_task)

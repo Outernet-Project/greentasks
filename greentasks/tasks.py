@@ -82,9 +82,14 @@ class PackagedTask(object):
     #: Type of future object to use
     future_class = AsyncResult
 
-    def __init__(self, task_cls, args=None, kwargs=None, callback=None,
-                 errback=None):
-        self.task_cls = task_cls
+    def __init__(self, task, args=None, kwargs=None, callback=None,
+                 errback=None, delay=None, periodic=False):
+        if not self.base_task_class.is_descendant(task):
+            # convert the passed in callable into a subclass of py:class:`Task`
+            task = self.base_task_class.from_callable(task,
+                                                      delay=delay,
+                                                      periodic=periodic)
+        self.task_cls = task
         self.args = args or tuple()
         self.kwargs = kwargs or dict()
         self.callback = callback
