@@ -79,13 +79,17 @@ class PackagedTask(object):
     #: Base class used to implement the actual task logic
     base_task_class = Task
 
-    def __init__(self, task_cls, args, kwargs, callback, errback):
+    #: Type of future object to use
+    future_class = AsyncResult
+
+    def __init__(self, task_cls, args=None, kwargs=None, callback=None,
+                 errback=None):
         self.task_cls = task_cls
         self.args = args or tuple()
         self.kwargs = kwargs or dict()
         self.callback = callback
         self.errback = errback
-        self.result = AsyncResult()
+        self.result = self.future_class()
         self.id = self._generate_task_id()
         self._status = self.SCHEDULED
 
