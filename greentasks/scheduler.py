@@ -96,6 +96,10 @@ class TaskScheduler(object):
         """
         Schedule a task for execution and return the task object for it.
 
+        If ``task`` is a subclass of py:class:`Task`, the parameters ``delay``
+        and ``periodic`` will be ignored in favor of the ones defined on the
+        class itself.
+
         If ``delay`` is not specified, the task will be put into a queue and
         honor the existing order of scheduled tasks, being executed only after
         the tasks scheduled prior to it are completed.
