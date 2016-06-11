@@ -1,4 +1,3 @@
-import inspect
 import logging
 
 from gevent import spawn_later
