@@ -96,9 +96,9 @@ class PackagedTask(object):
     @staticmethod
     def _generate_task_id():
         """
-        Return a unique string that can be used as an ID for tasks.
+        Return a unique number that can be used as an ID for tasks.
         """
-        return uuid.uuid4().hex
+        return int(uuid.uuid4().hex, 16)
 
     @property
     def name(self):
