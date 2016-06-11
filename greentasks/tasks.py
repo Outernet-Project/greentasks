@@ -184,6 +184,9 @@ class PackagedTask(object):
     def __hash__(self):
         return self.id
 
+    def __eq__(self, other):
+        return hash(self.id) == hash(other.id)
+
     def __str__(self):
         ctx = dict(name=self.__class__.__name__,
                    task_name=self.name,
