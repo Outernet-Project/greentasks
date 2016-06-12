@@ -54,6 +54,7 @@ def test__periodic_no_delay(_execute, _async, scheduler):
     scheduler._periodic(packaged_task)
     assert task_instance.get_delay.called
     assert not _async.called
+    task_instance.store_delay.assert_called_once_with(None)
 
 
 @mock.patch.object(mod.TaskScheduler, '_async')
@@ -66,6 +67,7 @@ def test__periodic_has_delay(_execute, _async, scheduler):
     scheduler._periodic(packaged_task)
     assert task_instance.get_delay.called
     _async.assert_called_once_with(10, scheduler._periodic, packaged_task)
+    task_instance.store_delay.assert_called_once_with(10)
 
 
 @mock.patch.object(mod.TaskScheduler, '_async')
@@ -92,53 +94,70 @@ def test__consume_task_found(_execute, _async, scheduler):
 
 
 @mock.patch.object(mod.TaskScheduler, '_async')
-@mock.patch.object(mod.TaskScheduler.base_task_class, 'from_callable')
 @mock.patch.object(mod.TaskScheduler, 'packaged_task_class')
-def test_schedule_no_delay(packaged_task_class, from_callable, _async,
-                           scheduler):
+def test_schedule_instantiation_fails(packaged_task_class, _async, scheduler):
     (fn, callback, errback) = (mock.Mock(), mock.Mock(), mock.Mock())
     args = (1, 2)
     kwargs = dict(a=3)
-    packaged_task_class.return_value.delay = None
+    packaged_task_class.return_value.instantiate.return_value = None
     ret = scheduler.schedule(fn,
                              args=args,
                              kwargs=kwargs,
                              callback=callback,
                              errback=errback)
-    task_cls = from_callable.return_value
-    packaged_task_class.assert_called_once_with(task_cls,
+    assert ret is None
+
+
+@mock.patch.object(mod.TaskScheduler, '_async')
+@mock.patch.object(mod.TaskScheduler, 'packaged_task_class')
+def test_schedule_no_delay(packaged_task_class, _async, scheduler):
+    (fn, callback, errback) = (mock.Mock(), mock.Mock(), mock.Mock())
+    args = (1, 2)
+    kwargs = dict(a=3)
+    task_instance = packaged_task_class.return_value.instantiate.return_value
+    task_instance.get_start_delay.return_value = None
+    ret = scheduler.schedule(fn,
+                             args=args,
+                             kwargs=kwargs,
+                             callback=callback,
+                             errback=errback)
+    packaged_task_class.assert_called_once_with(fn,
                                                 args=args,
                                                 kwargs=kwargs,
                                                 callback=callback,
-                                                errback=errback)
+                                                errback=errback,
+                                                delay=None,
+                                                periodic=False)
     assert not _async.called
     assert scheduler._queue.peek() is packaged_task_class.return_value
     assert ret is packaged_task_class.return_value
 
 
 @mock.patch.object(mod.TaskScheduler, '_async')
-@mock.patch.object(mod.TaskScheduler.base_task_class, 'from_callable')
 @mock.patch.object(mod.TaskScheduler, 'packaged_task_class')
-def test_schedule_delayed_oneoff(packaged_task_class, from_callable, _async,
-                                 scheduler):
+def test_schedule_delayed_oneoff(packaged_task_class, _async, scheduler):
     (fn, callback, errback) = (mock.Mock(), mock.Mock(), mock.Mock())
     args = (1, 2)
     kwargs = dict(a=3)
     delay = 10
     periodic = False
-    packaged_task_class.return_value.delay = delay
     packaged_task_class.return_value.periodic = periodic
+    task_instance = packaged_task_class.return_value.instantiate.return_value
+    task_instance.get_start_delay.return_value = delay
     ret = scheduler.schedule(fn,
                              args=args,
                              kwargs=kwargs,
                              callback=callback,
-                             errback=errback)
-    task_cls = from_callable.return_value
-    packaged_task_class.assert_called_once_with(task_cls,
+                             errback=errback,
+                             delay=delay,
+                             periodic=periodic)
+    packaged_task_class.assert_called_once_with(fn,
                                                 args=args,
                                                 kwargs=kwargs,
                                                 callback=callback,
-                                                errback=errback)
+                                                errback=errback,
+                                                delay=delay,
+                                                periodic=periodic)
     _async.assert_called_once_with(delay,
                                    scheduler._execute,
                                    packaged_task_class.return_value)
@@ -147,52 +166,32 @@ def test_schedule_delayed_oneoff(packaged_task_class, from_callable, _async,
 
 
 @mock.patch.object(mod.TaskScheduler, '_async')
-@mock.patch.object(mod.TaskScheduler.base_task_class, 'from_callable')
 @mock.patch.object(mod.TaskScheduler, 'packaged_task_class')
-def test_schedule_delayed_periodic(packaged_task_class, from_callable, _async,
-                                   scheduler):
+def test_schedule_delayed_periodic(packaged_task_class, _async, scheduler):
     (fn, callback, errback) = (mock.Mock(), mock.Mock(), mock.Mock())
     args = (1, 2)
     kwargs = dict(a=3)
     delay = 10
     periodic = True
-    packaged_task_class.return_value.delay = delay
     packaged_task_class.return_value.periodic = periodic
+    task_instance = packaged_task_class.return_value.instantiate.return_value
+    task_instance.get_start_delay.return_value = delay
     ret = scheduler.schedule(fn,
                              args=args,
                              kwargs=kwargs,
                              callback=callback,
-                             errback=errback)
-    task_cls = from_callable.return_value
-    packaged_task_class.assert_called_once_with(task_cls,
+                             errback=errback,
+                             delay=delay,
+                             periodic=periodic)
+    packaged_task_class.assert_called_once_with(fn,
                                                 args=args,
                                                 kwargs=kwargs,
                                                 callback=callback,
-                                                errback=errback)
+                                                errback=errback,
+                                                delay=delay,
+                                                periodic=periodic)
     _async.assert_called_once_with(delay,
                                    scheduler._periodic,
                                    packaged_task_class.return_value)
     assert scheduler._queue.empty()
     assert ret is packaged_task_class.return_value
-
-
-@mock.patch.object(mod.TaskScheduler, '_async')
-@mock.patch.object(mod.TaskScheduler.base_task_class, 'from_callable')
-@mock.patch.object(mod.TaskScheduler.base_task_class, 'is_descendant')
-def test_schedule_base_task_subclass(is_descendant, from_callable, _async,
-                                     scheduler):
-    task = mock.Mock()
-    is_descendant.return_value = True
-    scheduler.schedule(task, delay=10, periodic=True)
-    assert not from_callable.called
-
-
-@mock.patch.object(mod.TaskScheduler, '_async')
-@mock.patch.object(mod.TaskScheduler.base_task_class, 'from_callable')
-@mock.patch.object(mod.TaskScheduler.base_task_class, 'is_descendant')
-def test_schedule_non_base_task_subclass(is_descendant, from_callable, _async,
-                                         scheduler):
-    task = mock.Mock()
-    is_descendant.return_value = False
-    scheduler.schedule(task, delay=10, periodic=True)
-    from_callable.assert_called_once_with(task, delay=10, periodic=True)

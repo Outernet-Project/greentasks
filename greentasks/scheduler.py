@@ -71,6 +71,9 @@ class TaskScheduler(object):
                               packaged_task.id,
                               packaged_task.name)
         else:
+            # store the current calculated delay so it can be accessed by the
+            # next task instance
+            task_instance.store_delay(delay)
             if delay is None:
                 # task does not wish to be rescheduled again
                 return
@@ -128,17 +131,24 @@ class TaskScheduler(object):
                                                  errback=errback,
                                                  delay=delay,
                                                  periodic=periodic)
-        if packaged_task.delay is None:
+        # attempt instantiation of task
+        task_instance = packaged_task.instantiate()
+        if not task_instance:
+            # instantiation failed, task is not runnable
+            return
+        # get start delay (if any)
+        start_delay = task_instance.get_start_delay()
+        if start_delay is None:
             # schedule an ordered, one-off task
             self._queue.put(packaged_task)
             # early return with packaged task object to simplify flow
             return packaged_task
         # async task, order does not matter
         if packaged_task.periodic:
-            # schedule a period task
-            self._async(packaged_task.delay, self._periodic, packaged_task)
+            # schedule a periodic task
+            self._async(start_delay, self._periodic, packaged_task)
         else:
             # schedule a one-off task
-            self._async(packaged_task.delay, self._execute, packaged_task)
+            self._async(start_delay, self._execute, packaged_task)
         # return packaged task object in both cases
         return packaged_task

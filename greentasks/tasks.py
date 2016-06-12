@@ -9,10 +9,23 @@ class Task(object):
     """
     Base task class, meant to be subclassed by implementors.
     """
-    #: Fixed delay in which amount of time should the task run
+    #: Name of the task
+    name = None
+    #: Fixed delay in which amount of time should the task run. Every time the
+    #: task class is instantiated, the value of py:attr:`~Task.delay` is going
+    #: to be set to the value that was obtained from py:meth:`~Task.get_delay`
+    #: on the previous run.
     delay = None
     #: Indicates whether the task should be repeated or not
     periodic = False
+
+    def get_start_delay(self):
+        """
+        Return the amount of time in which this task should run for the first
+        time. Subclasses may override this method and implement custom logic
+        that calculates the value dynamically.
+        """
+        return self.delay
 
     def get_delay(self):
         """
@@ -21,7 +34,7 @@ class Task(object):
         logic that calculates the value dynamically.
 
         Returning ``None`` from this method will stop the task from being
-        rescheduled ever again.
+        rescheduled again.
         """
         return self.delay
 
@@ -39,6 +52,14 @@ class Task(object):
         return self.run(*args, **kwargs)
 
     @classmethod
+    def store_delay(cls, delay):
+        """
+        Store ``delay`` on the py:attr:`~Task.delay` class-attribute, so on
+        it's subsequent instantiation the value will be accessible.
+        """
+        cls.delay = delay
+
+    @classmethod
     def from_callable(cls, fn, delay, periodic):
         """
         Generate a subclass of py:class:`Task` from the passed in callable by
@@ -47,8 +68,20 @@ class Task(object):
         attributes to it as well.
         """
         bases = (cls,)
-        attrs = dict(delay=delay, periodic=periodic, run=staticmethod(fn))
-        return type('AutoGen{}'.format(fn.__name__.capitalize()), bases, attrs)
+        name = fn.__name__
+        attrs = dict(name=name,
+                     delay=delay,
+                     periodic=periodic,
+                     run=staticmethod(fn))
+        return type('AutoGen{}'.format(name.capitalize()), bases, attrs)
+
+    @classmethod
+    def get_name(cls):
+        """
+        Return explicitly specified name of task, falling back to name of the
+        class itself, if not specified.
+        """
+        return cls.name or cls.__name__
 
     @classmethod
     def is_descendant(cls, candidate):
@@ -110,7 +143,7 @@ class PackagedTask(object):
         """
         Return the name of the underlying py:attr:`~PackagedTask.task_cls`.
         """
-        return self.task_cls.__name__
+        return self.task_cls.get_name()
 
     @property
     def status(self):
@@ -118,20 +151,6 @@ class PackagedTask(object):
         Return the current status of the task.
         """
         return self._status
-
-    @property
-    def delay(self):
-        """
-        Return the value of py:attr:`~Task.delay`.
-        """
-        return self.task_cls.delay
-
-    @property
-    def periodic(self):
-        """
-        Return the value of py:attr:`~Task.periodic`.
-        """
-        return self.task_cls.periodic
 
     def _failed(self, exc):
         """
@@ -155,6 +174,20 @@ class PackagedTask(object):
         if self.callback:
             self.callback(ret_val)
 
+    def instantiate(self):
+        """
+        Yield a new instance of the stored py:class:`Task` class, or ``None``
+        in case instantiation fails.
+        """
+        try:
+            return self.task_cls()
+        except Exception as exc:
+            logging.exception("Task[%s][%s] instantiation failed.",
+                              self.name,
+                              self.id)
+            self._failed(exc)
+            return None
+
     def run(self):
         """
         Execute the stored task, silencing and logging any exceptions it might
@@ -168,9 +201,11 @@ class PackagedTask(object):
         self._status = self.PROCESSING
         # in case task instantation fails, make sure the finally clause won't
         # be trying to access an undefined variable
-        task_instance = None
+        task_instance = self.instantiate()
+        if not task_instance:
+            return task_instance
+        # task instantiation succeeded, start execution
         try:
-            task_instance = self.task_cls()
             ret_val = task_instance(*self.args, **self.kwargs)
         except Exception as exc:
             logging.exception("Task[%s][%s] execution failed.",
