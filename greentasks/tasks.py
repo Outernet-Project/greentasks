@@ -9,6 +9,8 @@ class Task(object):
     """
     Base task class, meant to be subclassed by implementors.
     """
+    #: Prefix used for task name when converting a task from a callable
+    auto_generated_name_prefix = 'AutoGen'
     #: Name of the task
     name = None
     #: Fixed delay in which amount of time should the task run.
@@ -66,7 +68,9 @@ class Task(object):
                      delay=delay,
                      periodic=periodic,
                      run=staticmethod(fn))
-        return type('AutoGen{}'.format(name.capitalize()), bases, attrs)
+        return type(cls.auto_generated_name_prefix + name.capitalize(),
+                    bases,
+                    attrs)
 
     @classmethod
     def get_name(cls):
