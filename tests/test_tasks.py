@@ -34,6 +34,21 @@ def test_task_get_delay():
     assert task.get_delay(previous_delay=None) == 15
 
 
+@pytest.mark.parametrize('retry_count, retry_delay', [
+    (0, 15),
+    (1, None),
+    (2, None),
+])
+def test_task_get_retry_delay(retry_count, retry_delay):
+
+    class TestTask(mod.Task):
+        retry_delay = 15
+        max_retries = 1
+
+    task = TestTask()
+    assert task.get_retry_delay(None, retry_count) == retry_delay
+
+
 @mock.patch.object(mod.Task, 'run')
 def test_task___call__(run):
     task = mod.Task()
@@ -91,8 +106,16 @@ def test_init_with_base_task_subclass(is_descendant, from_callable):
 def test_init_with_non_base_task_subclass(is_descendant, from_callable):
     task = mock.Mock()
     is_descendant.return_value = False
-    mod.PackagedTask(task, delay=10, periodic=True)
-    from_callable.assert_called_once_with(task, delay=10, periodic=True)
+    mod.PackagedTask(task,
+                     delay=10,
+                     periodic=True,
+                     retry_delay=5,
+                     max_retries=3)
+    from_callable.assert_called_once_with(task,
+                                          delay=10,
+                                          periodic=True,
+                                          retry_delay=5,
+                                          max_retries=3)
 
 
 def test__generate_task_id():
@@ -108,37 +131,100 @@ def test_packaged_task_name(base_task_class):
 
 
 @mock.patch.object(mod.PackagedTask, 'base_task_class')
-def test_packaged_task_stats(base_task_class):
+def test_packaged_task_status(base_task_class):
     ptask = mod.PackagedTask(mock.Mock())
     assert ptask.status == mod.PackagedTask.SCHEDULED
 
 
 @mock.patch.object(mod.PackagedTask, 'base_task_class')
+def test__retry_fail(base_task_class):
+    ptask = mod.PackagedTask(mock.Mock())
+    task_instance = mock.Mock()
+    task_instance.get_retry_delay.side_effect = Exception('test')
+    assert ptask._retry(task_instance) == dict(retry_delay=None)
+    task_instance.get_retry_delay.assert_called_once_with(None, 0)
+
+
+@mock.patch.object(mod.PackagedTask, 'base_task_class')
+def test__retry_success(base_task_class):
+    ptask = mod.PackagedTask(mock.Mock())
+    task_instance = mock.Mock()
+    retry_delay = task_instance.get_retry_delay.return_value
+    assert ptask._retry(task_instance) == dict(retry_delay=retry_delay)
+    task_instance.get_retry_delay.assert_called_once_with(None, 0)
+    assert ptask._previous_retry_delay == retry_delay
+    assert ptask._retry_count == 1
+    assert ptask._status == mod.PackagedTask.RETRY
+
+
+@mock.patch.object(mod.PackagedTask, 'base_task_class')
+def test__reschedule_fail(base_task_class):
+    ptask = mod.PackagedTask(mock.Mock())
+    task_instance = mock.Mock()
+    task_instance.get_delay.side_effect = Exception('test')
+    assert ptask._reschedule(task_instance) == dict(delay=None)
+    task_instance.get_delay.assert_called_once_with(None)
+
+
+@mock.patch.object(mod.PackagedTask, 'base_task_class')
+def test__reschedule_success(base_task_class):
+    ptask = mod.PackagedTask(mock.Mock())
+    task_instance = mock.Mock()
+    delay = task_instance.get_delay.return_value
+    assert ptask._reschedule(task_instance) == dict(delay=delay)
+    task_instance.get_delay.assert_called_once_with(None)
+    assert ptask._previous_delay == delay
+    assert ptask._status == mod.PackagedTask.SCHEDULED
+
+
+@mock.patch.object(mod.PackagedTask, '_retry')
+@mock.patch.object(mod.PackagedTask, 'base_task_class')
 @mock.patch.object(mod.PackagedTask, 'future_class')
-def test__failed(future_class, base_task_class):
+def test__failed_instantiation(future_class, base_task_class, _retry):
     result = future_class.return_value
     mocked_task = mock.Mock()
     errback = mock.Mock()
     mocked_exc = mock.Mock()
     ptask = mod.PackagedTask(mocked_task, errback=errback)
-    ptask._failed(mocked_exc)
+    assert ptask._failed(None, mocked_exc) == {}
     result.set_exception.assert_called_once_with(mocked_exc)
     errback.assert_called_once_with(mocked_exc)
     assert ptask.status == mod.PackagedTask.FAILED
+    assert not _retry.called
 
 
+@mock.patch.object(mod.PackagedTask, '_retry')
 @mock.patch.object(mod.PackagedTask, 'base_task_class')
 @mock.patch.object(mod.PackagedTask, 'future_class')
-def test__finished(future_class, base_task_class):
+def test__failed_execution(future_class, base_task_class, _retry):
     result = future_class.return_value
     mocked_task = mock.Mock()
+    task_instance = mocked_task.return_value
+    errback = mock.Mock()
+    mocked_exc = mock.Mock()
+    ptask = mod.PackagedTask(mocked_task, errback=errback)
+    assert ptask._failed(task_instance, mocked_exc) == _retry.return_value
+    result.set_exception.assert_called_once_with(mocked_exc)
+    errback.assert_called_once_with(mocked_exc)
+    assert ptask.status == mod.PackagedTask.FAILED
+    _retry.assert_called_once_with(task_instance)
+
+
+@mock.patch.object(mod.PackagedTask, '_reschedule')
+@mock.patch.object(mod.PackagedTask, 'base_task_class')
+@mock.patch.object(mod.PackagedTask, 'future_class')
+def test__finished(future_class, base_task_class, _reschedule):
+    result = future_class.return_value
+    mocked_task = mock.Mock()
+    task_instance = mocked_task.return_value
     callback = mock.Mock()
     ret_val = mock.Mock()
     ptask = mod.PackagedTask(mocked_task, callback=callback)
-    ptask._finished(ret_val)
+    ptask._finished(task_instance, ret_val)
     result.set.assert_called_once_with(ret_val)
     callback.assert_called_once_with(ret_val)
     assert ptask.status == mod.PackagedTask.FINISHED
+    _reschedule.assert_called_once_with(task_instance)
 
 
 @mock.patch.object(mod.PackagedTask, '_failed')
@@ -149,7 +235,7 @@ def test_instantiate_fail(base_task_class, _failed):
     mocked_task.side_effect = exc
     ptask = mod.PackagedTask(mocked_task)
     assert ptask.instantiate() is None
-    _failed.assert_called_once_with(exc)
+    _failed.assert_called_once_with(None, exc)
 
 
 @mock.patch.object(mod.PackagedTask, 'base_task_class')
@@ -165,7 +251,7 @@ def test_run_failed_instantiation(base_task_class, instantiate):
     mocked_task = mock.MagicMock()
     instantiate.return_value = None
     ptask = mod.PackagedTask(mocked_task)
-    assert ptask.run() is None
+    assert ptask.run() == {}
 
 
 @mock.patch.object(mod.PackagedTask, '_failed')
@@ -177,8 +263,8 @@ def test_run_failed_execution(base_task_class, instantiate, _failed):
     exc = Exception("test")
     task_instance.side_effect = exc
     ptask = mod.PackagedTask(mocked_task)
-    assert ptask.run() is task_instance
-    _failed.assert_called_once_with(exc)
+    assert ptask.run() is _failed.return_value
+    _failed.assert_called_once_with(task_instance, exc)
 
 
 @mock.patch.object(mod.PackagedTask, '_finished')
@@ -190,9 +276,10 @@ def test_run_finished(base_task_class, instantiate, _finished):
     mocked_task = mock.MagicMock()
     task_instance = instantiate.return_value
     ptask = mod.PackagedTask(mocked_task, args, kwargs)
-    assert ptask.run() is task_instance
+    assert ptask.run() is _finished.return_value
     task_instance.assert_called_once_with(*args, **kwargs)
-    _finished.assert_called_once_with(task_instance.return_value)
+    _finished.assert_called_once_with(task_instance,
+                                      task_instance.return_value)
 
 
 @mock.patch.object(mod.PackagedTask, '_generate_task_id')

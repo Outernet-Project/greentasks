@@ -16,64 +16,45 @@ def test__async(spawn_later, scheduler):
     spawn_later.assert_called_once_with(10, fn, 1, 2, a=3, b=4)
 
 
-def test__execute(scheduler):
+@mock.patch.object(mod.TaskScheduler, '_async')
+def test__execute_no_retry(_async, scheduler):
     packaged_task = mock.Mock()
+    packaged_task.run.return_value = {'delay': 10}
     ret = scheduler._execute(packaged_task)
     assert packaged_task.run.called
-    assert ret == packaged_task.run.return_value
-
-
-@mock.patch.object(mod.TaskScheduler, '_async')
-@mock.patch.object(mod.TaskScheduler, '_execute')
-def test__periodic_task_instantiation_fails(_execute, _async, scheduler):
-    packaged_task = mock.Mock()
-    _execute.return_value = None
-    scheduler._periodic(packaged_task)
+    assert ret == {'delay': 10}
     assert not _async.called
 
 
 @mock.patch.object(mod.TaskScheduler, '_async')
-@mock.patch.object(mod.TaskScheduler, '_execute')
-def test__periodic_task_get_delay_fails(_execute, _async, scheduler):
+def test__execute_with_retry(_async, scheduler):
     packaged_task = mock.Mock()
-    task_instance = mock.Mock()
-    _execute.return_value = task_instance
-    task_instance.get_delay.side_effect = Exception()
-    scheduler._periodic(packaged_task)
-    assert task_instance.get_delay.called
-    assert not _async.called
+    packaged_task.run.return_value = {'retry_delay': 10}
+    ret = scheduler._execute(packaged_task)
+    assert packaged_task.run.called
+    assert ret == {'retry_delay': 10}
+    _async.assert_called_once_with(10, scheduler._execute, packaged_task)
 
 
 @mock.patch.object(mod.TaskScheduler, '_async')
 @mock.patch.object(mod.TaskScheduler, '_execute')
 def test__periodic_no_delay(_execute, _async, scheduler):
     packaged_task = mock.Mock()
-    packaged_task.previous_delay = None
-    task_instance = mock.Mock()
-    _execute.return_value = task_instance
-    task_instance.get_delay.return_value = None
-    scheduler._periodic(packaged_task)
-    task_instance.get_delay.assert_called_once_with(None)
+    _execute.return_value = {}
+    assert scheduler._periodic(packaged_task) is None
     assert not _async.called
-    assert packaged_task.previous_delay is None
+    _execute.assert_called_once_with(packaged_task)
 
 
 @mock.patch.object(mod.TaskScheduler, '_async')
 @mock.patch.object(mod.TaskScheduler, '_execute')
 def test__periodic_has_delay(_execute, _async, scheduler):
-    previous_delay = 30
-    new_delay = 40
     packaged_task = mock.Mock()
-    packaged_task.previous_delay = previous_delay
-    task_instance = mock.Mock()
-    _execute.return_value = task_instance
-    task_instance.get_delay.return_value = new_delay
-    scheduler._periodic(packaged_task)
-    task_instance.get_delay.assert_called_once_with(previous_delay)
-    _async.assert_called_once_with(new_delay,
+    _execute.return_value = {'delay': 20}
+    assert scheduler._periodic(packaged_task) is None
+    _async.assert_called_once_with(20,
                                    scheduler._periodic,
                                    packaged_task)
-    assert packaged_task.previous_delay == new_delay
 
 
 @mock.patch.object(mod.TaskScheduler, '_async')
@@ -133,7 +114,9 @@ def test_schedule_no_delay(packaged_task_class, _async, scheduler):
                                                 callback=callback,
                                                 errback=errback,
                                                 delay=None,
-                                                periodic=False)
+                                                periodic=False,
+                                                retry_delay=None,
+                                                max_retries=0)
     assert not _async.called
     assert scheduler._queue.peek() is packaged_task_class.return_value
     assert ret is packaged_task_class.return_value
@@ -147,6 +130,8 @@ def test_schedule_delayed_oneoff(packaged_task_class, _async, scheduler):
     kwargs = dict(a=3)
     delay = 10
     periodic = False
+    retry_delay = 5
+    max_retries = 3
     task_instance = packaged_task_class.return_value.instantiate.return_value
     task_instance.get_start_delay.return_value = delay
     task_instance.periodic = periodic
@@ -156,14 +141,18 @@ def test_schedule_delayed_oneoff(packaged_task_class, _async, scheduler):
                              callback=callback,
                              errback=errback,
                              delay=delay,
-                             periodic=periodic)
+                             periodic=periodic,
+                             retry_delay=retry_delay,
+                             max_retries=max_retries)
     packaged_task_class.assert_called_once_with(fn,
                                                 args=args,
                                                 kwargs=kwargs,
                                                 callback=callback,
                                                 errback=errback,
                                                 delay=delay,
-                                                periodic=periodic)
+                                                periodic=periodic,
+                                                retry_delay=retry_delay,
+                                                max_retries=max_retries)
     _async.assert_called_once_with(delay,
                                    scheduler._execute,
                                    packaged_task_class.return_value)
@@ -179,6 +168,8 @@ def test_schedule_delayed_periodic(packaged_task_class, _async, scheduler):
     kwargs = dict(a=3)
     delay = 10
     periodic = True
+    retry_delay = 5
+    max_retries = 3
     task_instance = packaged_task_class.return_value.instantiate.return_value
     task_instance.get_start_delay.return_value = delay
     task_instance.periodic = periodic
@@ -188,14 +179,18 @@ def test_schedule_delayed_periodic(packaged_task_class, _async, scheduler):
                              callback=callback,
                              errback=errback,
                              delay=delay,
-                             periodic=periodic)
+                             periodic=periodic,
+                             retry_delay=retry_delay,
+                             max_retries=max_retries)
     packaged_task_class.assert_called_once_with(fn,
                                                 args=args,
                                                 kwargs=kwargs,
                                                 callback=callback,
                                                 errback=errback,
                                                 delay=delay,
-                                                periodic=periodic)
+                                                periodic=periodic,
+                                                retry_delay=retry_delay,
+                                                max_retries=max_retries)
     _async.assert_called_once_with(delay,
                                    scheduler._periodic,
                                    packaged_task_class.return_value)

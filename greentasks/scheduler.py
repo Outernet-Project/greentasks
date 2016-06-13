@@ -1,5 +1,3 @@
-import logging
-
 from gevent import spawn_later
 from gevent.queue import Queue, Empty as QueueEmpty
 
@@ -22,6 +20,8 @@ class TaskScheduler(object):
     order they were scheduled. The queue is processed in fixed intervals which
     is specified by the ``consume_tasks_delay`` parameter in the constructor of
     the scheduler. In each wakeup, exactly one task will be processed.
+
+    Failing tasks are retried if the task implementation allows to do so.
     """
     #: Wrapper class enclosing all the data needed for a single task
     packaged_task_class = PackagedTask
@@ -47,39 +47,30 @@ class TaskScheduler(object):
         which handles the invocation of appropriate callbacks and errbacks and
         the resolving of the future object.
 
-        The return value is forwarded as is, which is the task instance itself,
-        unless instantiation failed for some reason.
+        The returned ``task_info`` structure is checked to see if the task has
+        to be retried or not, and do so if it needs to be.
         """
-        return packaged_task.run()
+        task_info = packaged_task.run()
+        # check if task needs to be retried
+        retry_delay = task_info.get('retry_delay', None)
+        if retry_delay is not None:
+            # reschedule task automatically to run in ``retry_delay`` seconds
+            self._async(retry_delay, self._execute, packaged_task)
+        return task_info
 
     def _periodic(self, packaged_task):
         """
         Execute a periodic task through py:meth:`~TaskScheduler._execute` and
-        reschedule it automatically to run in the amount of time returned from
-        py:meth:`~Task.get_delay`.
+        reschedule it automatically to run in the amount of time returned in
+        ``task_info``.
         """
-        task_instance = self._execute(packaged_task)
-        if task_instance is None:
-            # task instantiation probably failed, so it cannot be repeated
+        task_info = self._execute(packaged_task)
+        delay = task_info.get('delay', None)
+        if delay is None:
+            # task cannot be be rescheduled again
             return
-        # attempt retrieving the ``delay`` which indicates in which amount of
-        # time should the task run again
-        try:
-            delay = task_instance.get_delay(packaged_task.previous_delay)
-        except Exception:
-            logging.exception("Task[%s][%s] `get_delay` failed, no further "
-                              "rescheduling will take place.",
-                              packaged_task.name,
-                              packaged_task.id)
-        else:
-            # store the current calculated delay so it can be accessed by the
-            # next task instance
-            packaged_task.previous_delay = delay
-            if delay is None:
-                # task does not wish to be rescheduled again
-                return
-            # task needs to be rescheduled again
-            self._async(delay, self._periodic, packaged_task)
+        # task needs to be rescheduled again
+        self._async(delay, self._periodic, packaged_task)
 
     def _consume(self):
         """
@@ -96,33 +87,42 @@ class TaskScheduler(object):
             self._async(self._consume_tasks_delay, self._consume)
 
     def schedule(self, task, args=None, kwargs=None, callback=None,
-                 errback=None, delay=None, periodic=False):
+                 errback=None, delay=None, periodic=False, retry_delay=None,
+                 max_retries=0):
         """
         Schedule a task for execution and return a packaged task object for it.
 
-        If ``task`` is a subclass of py:class:`Task`, the parameters ``delay``
-        and ``periodic`` will be ignored in favor of the ones defined on the
-        class itself.
+        ``task`` may be any callable and it should contain the task logic. If
+        ``task`` is a subclass of py:class:`Task`, the parameters ``delay``,
+        ``periodic``, ``retry_delay`` and ``max_retries`` will be ignored in
+        favor of the ones defined on the class itself.
 
-        If ``delay`` is not specified, the task will be put into a queue and
-        honor the existing order of scheduled tasks, being executed only after
-        the tasks scheduled prior to it are completed.
+        ``args`` and ``kwargs`` contain the positional and keyword arguments to
+        be passed to ``task``.
 
-        If ``delay`` is specified, the task will be scheduled to run NOT BEFORE
-        the specified amount of seconds, not following any particular order,
-        but there is no guarantee that it will run in exactly that time.
+        ``callback`` and ``errback`` are callables to be invoked with the
+        return value of ``task`` or the exception object raised if ``task``
+        fails, respectively.
+
+        ``delay`` is the amount of seconds in which ``task`` should be
+        executed. If ``delay`` is not specified, the task will be put into a
+        queue and honor the existing order of scheduled tasks, being executed
+        only after the tasks scheduled prior to it are finished. If ``delay``
+        is specified, the task will be scheduled to run NOT BEFORE the
+        specified amount of seconds, not following any particular order, but
+        there is no guarantee that it will run in exactly that time.
 
         The ``periodic`` flag has effect only on tasks which specified a
         ``delay``, and those tasks will be rescheduled automatically for the
-        same ``delay`` every time after they are executed.
+        same ``delay`` every time after they are executed (unless ``task`` is
+        a subclass of py:class:`Task` and it implemented custom rules to
+        calculate the value of ``delay``.
 
-        :param task:      Callable to execute
-        :param args:      Tuple containing positional arguments for ``task``
-        :param kwargs:    Dict containing keyword arguments for ``task``
-        :param callback:  Function to invoke with return value of ``task``
-        :param errback:   Function to invoke with exception if ``task`` fails
-        :param delay:     Int - amount of seconds to execute ``task`` in
-        :param periodic:  Boolean flag indicating if ``task`` is repeatable
+        ``retry_delay`` is the amount of seconds in which ``task`` can be
+        retried, in case it fails. The value of ``None`` prohibits retries.
+
+        ``max_retires`` is the maximum number of retry attempts for a failing
+        task.
         """
         # package task with all of it's arguments
         packaged_task = self.packaged_task_class(task,
@@ -131,7 +131,9 @@ class TaskScheduler(object):
                                                  callback=callback,
                                                  errback=errback,
                                                  delay=delay,
-                                                 periodic=periodic)
+                                                 periodic=periodic,
+                                                 retry_delay=retry_delay,
+                                                 max_retries=max_retries)
         # attempt instantiation of task
         task_instance = packaged_task.instantiate()
         if not task_instance:

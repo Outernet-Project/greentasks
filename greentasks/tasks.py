@@ -17,6 +17,10 @@ class Task(object):
     delay = None
     #: Indicates whether the task should be repeated or not
     periodic = False
+    #: Maximum number of retries a task can rescheduled if it fails
+    max_retries = 0
+    #: Fixed delay in which amount of time can a task run again if it fails
+    retry_delay = None
 
     def get_start_delay(self):
         """
@@ -41,6 +45,25 @@ class Task(object):
         """
         return self.delay
 
+    def get_retry_delay(self, previous_retry_delay, retry_count):
+        """
+        Return the amount of time in which a task can run again if it fails.
+        Subclasses may override this method and implement custom logic that
+        calculates the value dynamically.
+
+        The parameter ``previous_retry_delay`` indicates the value returned by
+        py:meth:`~Task.get_retry_delay` during the last call to it.
+
+        The parameter ``retry_count`` indicates the number of times the task
+        was already retried.
+
+        Returning ``None`` from this method means the task cannot be retried.
+        """
+        if retry_count < self.max_retries:
+            return self.retry_delay
+        # max retries exceeded
+        return None
+
     def run(self, *args, **kwargs):
         """
         Subclasses should override this method and implement the task logic.
@@ -55,19 +78,16 @@ class Task(object):
         return self.run(*args, **kwargs)
 
     @classmethod
-    def from_callable(cls, fn, delay, periodic):
+    def from_callable(cls, fn, **kwargs):
         """
         Generate a subclass of py:class:`Task` from the passed in callable by
         substituting the unimplemented py:meth:`~Task.run` method of the parent
-        class with ``fn`` and attaching the other ``delay``, ``periodic`` and
-        ``name`` attributes to it as well.
+        class with ``fn`` and attaching ``name`` and all the passed ``kwargs``
+        as class attributes to it as well.
         """
         bases = (cls,)
         name = fn.__name__
-        attrs = dict(name=name,
-                     delay=delay,
-                     periodic=periodic,
-                     run=staticmethod(fn))
+        attrs = dict(run=staticmethod(fn), name=name, **kwargs)
         return type(cls.auto_generated_name_prefix + name.capitalize(),
                     bases,
                     attrs)
@@ -105,6 +125,7 @@ class PackagedTask(object):
     PROCESSING = 'PROCESSING'
     FAILED = 'FAILED'
     FINISHED = 'FINISHED'
+    RETRY = 'RETRY'
 
     #: Base class used to implement the actual task logic
     base_task_class = Task
@@ -113,12 +134,15 @@ class PackagedTask(object):
     future_class = AsyncResult
 
     def __init__(self, task, args=None, kwargs=None, callback=None,
-                 errback=None, delay=None, periodic=False):
+                 errback=None, delay=None, periodic=False, retry_delay=None,
+                 max_retries=0):
         if not self.base_task_class.is_descendant(task):
             # convert the passed in callable into a subclass of py:class:`Task`
             task = self.base_task_class.from_callable(task,
                                                       delay=delay,
-                                                      periodic=periodic)
+                                                      periodic=periodic,
+                                                      retry_delay=retry_delay,
+                                                      max_retries=max_retries)
         self.task_cls = task
         self.args = args or tuple()
         self.kwargs = kwargs or dict()
@@ -126,7 +150,10 @@ class PackagedTask(object):
         self.errback = errback
         self.result = self.future_class()
         self.id = self._generate_task_id()
-        self.previous_delay = None
+        # private attributes that track the state of a task
+        self._previous_delay = None
+        self._previous_retry_delay = None
+        self._retry_count = 0
         self._status = self.SCHEDULED
 
     @staticmethod
@@ -150,7 +177,53 @@ class PackagedTask(object):
         """
         return self._status
 
-    def _failed(self, exc):
+    def _retry(self, task_instance):
+        """
+        Attempt querying the delay in which amount of time should the task be
+        retried, and if it succeeds, set the state of py:class:`PackagedTask`
+        to indicate that the task is being retried. If the query fails, return
+        appropriate information to indicate that the task cannot be retried.
+        """
+        try:
+            delay = task_instance.get_retry_delay(self._previous_retry_delay,
+                                                  self._retry_count)
+        except Exception:
+            logging.exception("Task[%s][%s] `get_retry_delay` failed, task "
+                              "cannot be retried.",
+                              self.name,
+                              self.id)
+            return dict(retry_delay=None)
+        else:
+            # store the current calculated retry delay so it can be accessed by
+            # the next task instance
+            self._previous_retry_delay = delay
+            self._retry_count += 1
+            self._status = self.RETRY
+            return dict(retry_delay=delay)
+
+    def _reschedule(self, task_instance):
+        """
+        Attempt querying the delay in which amount of time should the task be
+        rescheduled. If it succeeds, set the state of py:class:`PackagedTask`
+        to indicate that the task is rescheduled. If the query fails, return
+        appropriate information to indicate that the task can't be rescheduled.
+        """
+        try:
+            delay = task_instance.get_delay(self._previous_delay)
+        except Exception:
+            logging.exception("Task[%s][%s] `get_delay` failed, no further "
+                              "rescheduling will take place.",
+                              self.name,
+                              self.id)
+            return dict(delay=None)
+        else:
+            # store the current calculated delay so it can be accessed by the
+            # next task instance
+            self._previous_delay = delay
+            self._status = self.SCHEDULED
+            return dict(delay=delay)
+
+    def _failed(self, task_instance, exc):
         """
         Set py:attr:`~PackagedTask._status` flag to indicate failure, resolve
         the future with the passed in `exc` exception object and invoke the
@@ -160,8 +233,14 @@ class PackagedTask(object):
         self.result.set_exception(exc)
         if self.errback:
             self.errback(exc)
+        # check whether task instantiation failed or not
+        if task_instance is None:
+            # instantiation failed, no retry attempt should be made
+            return dict()
+        # attempt retrying the task, if possible
+        return self._retry(task_instance)
 
-    def _finished(self, ret_val):
+    def _finished(self, task_instance, ret_val):
         """
         Set py:attr:`~PackagedTask._status` flag to indicate success, resolve
         the future with ``ret_val`` - the return value of the task and invoke
@@ -171,6 +250,8 @@ class PackagedTask(object):
         self.result.set(ret_val)
         if self.callback:
             self.callback(ret_val)
+        # attempt rescheduling the task, if needed and possible
+        return self._reschedule(task_instance)
 
     def instantiate(self):
         """
@@ -183,7 +264,7 @@ class PackagedTask(object):
             logging.exception("Task[%s][%s] instantiation failed.",
                               self.name,
                               self.id)
-            self._failed(exc)
+            self._failed(None, exc)
             return None
 
     def run(self):
@@ -199,7 +280,7 @@ class PackagedTask(object):
         self._status = self.PROCESSING
         task_instance = self.instantiate()
         if not task_instance:
-            return task_instance
+            return {}
         # task instantiation succeeded, start execution
         try:
             ret_val = task_instance(*self.args, **self.kwargs)
@@ -207,15 +288,12 @@ class PackagedTask(object):
             logging.exception("Task[%s][%s] execution failed.",
                               self.name,
                               self.id)
-            self._failed(exc)
+            return self._failed(task_instance, exc)
         else:
             logging.info("Task[%s][%s] execution finished.",
                          self.name,
                          self.id)
-            self._finished(ret_val)
-        finally:
-            # return the task instance used to execute the task
-            return task_instance
+            return self._finished(task_instance, ret_val)
 
     def __hash__(self):
         return self.id
