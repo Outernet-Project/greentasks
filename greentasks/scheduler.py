@@ -64,7 +64,7 @@ class TaskScheduler(object):
         # attempt retrieving the ``delay`` which indicates in which amount of
         # time should the task run again
         try:
-            delay = task_instance.get_delay()
+            delay = task_instance.get_delay(packaged_task.previous_delay)
         except Exception:
             logging.exception("Task[%s][%s] `get_delay` failed, no further "
                               "rescheduling will take place.",
@@ -73,7 +73,7 @@ class TaskScheduler(object):
         else:
             # store the current calculated delay so it can be accessed by the
             # next task instance
-            task_instance.store_delay(delay)
+            packaged_task.previous_delay = delay
             if delay is None:
                 # task does not wish to be rescheduled again
                 return
@@ -144,7 +144,7 @@ class TaskScheduler(object):
             # early return with packaged task object to simplify flow
             return packaged_task
         # async task, order does not matter
-        if packaged_task.periodic:
+        if task_instance.periodic:
             # schedule a periodic task
             self._async(start_delay, self._periodic, packaged_task)
         else:

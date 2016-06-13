@@ -31,7 +31,7 @@ def test_task_get_delay():
         delay = 15
 
     task = TestTask()
-    assert task.get_delay() == 15
+    assert task.get_delay(previous_delay=None) == 15
 
 
 @mock.patch.object(mod.Task, 'run')
@@ -39,18 +39,6 @@ def test_task___call__(run):
     task = mod.Task()
     task(1, 2, a=3, b=4)
     run.assert_called_once_with(1, 2, a=3, b=4)
-
-
-def test_task_store_delay():
-
-    class TestTask(mod.Task):
-        delay = None
-
-    assert mod.Task.delay is None
-    assert TestTask.delay is None
-    TestTask.store_delay(15)
-    assert mod.Task.delay is None
-    assert TestTask.delay == 15
 
 
 def test_task_from_callable():

@@ -48,26 +48,32 @@ def test__periodic_task_get_delay_fails(_execute, _async, scheduler):
 @mock.patch.object(mod.TaskScheduler, '_execute')
 def test__periodic_no_delay(_execute, _async, scheduler):
     packaged_task = mock.Mock()
+    packaged_task.previous_delay = None
     task_instance = mock.Mock()
     _execute.return_value = task_instance
     task_instance.get_delay.return_value = None
     scheduler._periodic(packaged_task)
-    assert task_instance.get_delay.called
+    task_instance.get_delay.assert_called_once_with(None)
     assert not _async.called
-    task_instance.store_delay.assert_called_once_with(None)
+    assert packaged_task.previous_delay is None
 
 
 @mock.patch.object(mod.TaskScheduler, '_async')
 @mock.patch.object(mod.TaskScheduler, '_execute')
 def test__periodic_has_delay(_execute, _async, scheduler):
+    previous_delay = 30
+    new_delay = 40
     packaged_task = mock.Mock()
+    packaged_task.previous_delay = previous_delay
     task_instance = mock.Mock()
     _execute.return_value = task_instance
-    task_instance.get_delay.return_value = 10
+    task_instance.get_delay.return_value = new_delay
     scheduler._periodic(packaged_task)
-    assert task_instance.get_delay.called
-    _async.assert_called_once_with(10, scheduler._periodic, packaged_task)
-    task_instance.store_delay.assert_called_once_with(10)
+    task_instance.get_delay.assert_called_once_with(previous_delay)
+    _async.assert_called_once_with(new_delay,
+                                   scheduler._periodic,
+                                   packaged_task)
+    assert packaged_task.previous_delay == new_delay
 
 
 @mock.patch.object(mod.TaskScheduler, '_async')
@@ -141,9 +147,9 @@ def test_schedule_delayed_oneoff(packaged_task_class, _async, scheduler):
     kwargs = dict(a=3)
     delay = 10
     periodic = False
-    packaged_task_class.return_value.periodic = periodic
     task_instance = packaged_task_class.return_value.instantiate.return_value
     task_instance.get_start_delay.return_value = delay
+    task_instance.periodic = periodic
     ret = scheduler.schedule(fn,
                              args=args,
                              kwargs=kwargs,
@@ -173,9 +179,9 @@ def test_schedule_delayed_periodic(packaged_task_class, _async, scheduler):
     kwargs = dict(a=3)
     delay = 10
     periodic = True
-    packaged_task_class.return_value.periodic = periodic
     task_instance = packaged_task_class.return_value.instantiate.return_value
     task_instance.get_start_delay.return_value = delay
+    task_instance.periodic = periodic
     ret = scheduler.schedule(fn,
                              args=args,
                              kwargs=kwargs,

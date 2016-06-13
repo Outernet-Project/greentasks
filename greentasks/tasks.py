@@ -11,10 +11,7 @@ class Task(object):
     """
     #: Name of the task
     name = None
-    #: Fixed delay in which amount of time should the task run. Every time the
-    #: task class is instantiated, the value of py:attr:`~Task.delay` is going
-    #: to be set to the value that was obtained from py:meth:`~Task.get_delay`
-    #: on the previous run.
+    #: Fixed delay in which amount of time should the task run.
     delay = None
     #: Indicates whether the task should be repeated or not
     periodic = False
@@ -27,11 +24,15 @@ class Task(object):
         """
         return self.delay
 
-    def get_delay(self):
+    def get_delay(self, previous_delay):
         """
         Return the delay for periodic tasks in which amount of time they should
         run again. Subclasses may override this method and implement custom
         logic that calculates the value dynamically.
+
+        The parameter ``previous_delay`` indicates the value returned by
+        py:meth:`~Task.get_delay` in it's previous run. During the first run of
+        a periodic task, this value will be ``None``.
 
         Returning ``None`` from this method will stop the task from being
         rescheduled again.
@@ -50,14 +51,6 @@ class Task(object):
         callable.
         """
         return self.run(*args, **kwargs)
-
-    @classmethod
-    def store_delay(cls, delay):
-        """
-        Store ``delay`` on the py:attr:`~Task.delay` class-attribute, so on
-        it's subsequent instantiation the value will be accessible.
-        """
-        cls.delay = delay
 
     @classmethod
     def from_callable(cls, fn, delay, periodic):
@@ -129,6 +122,7 @@ class PackagedTask(object):
         self.errback = errback
         self.result = self.future_class()
         self.id = self._generate_task_id()
+        self.previous_delay = None
         self._status = self.SCHEDULED
 
     @staticmethod
