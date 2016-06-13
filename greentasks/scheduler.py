@@ -68,8 +68,8 @@ class TaskScheduler(object):
         except Exception:
             logging.exception("Task[%s][%s] `get_delay` failed, no further "
                               "rescheduling will take place.",
-                              packaged_task.id,
-                              packaged_task.name)
+                              packaged_task.name,
+                              packaged_task.id)
         else:
             # store the current calculated delay so it can be accessed by the
             # next task instance
