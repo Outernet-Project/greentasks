@@ -83,7 +83,7 @@ class TaskScheduler(object):
     def _consume(self):
         """
         Execute a single task from the queue, and reschedule consuming of the
-        queue in py:attr:`~_consume_tasks_delay`.
+        queue in py:attr:`~TaskScheduler._consume_tasks_delay` seconds.
         """
         try:
             packaged_task = self._queue.get_nowait()
@@ -97,7 +97,7 @@ class TaskScheduler(object):
     def schedule(self, task, args=None, kwargs=None, callback=None,
                  errback=None, delay=None, periodic=False):
         """
-        Schedule a task for execution and return the task object for it.
+        Schedule a task for execution and return a packaged task object for it.
 
         If ``task`` is a subclass of py:class:`Task`, the parameters ``delay``
         and ``periodic`` will be ignored in favor of the ones defined on the

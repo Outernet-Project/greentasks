@@ -57,8 +57,8 @@ class Task(object):
         """
         Generate a subclass of py:class:`Task` from the passed in callable by
         substituting the unimplemented py:meth:`~Task.run` method of the parent
-        class with ``fn`` and attaching the other ``delay`` and ``periodic``
-        attributes to it as well.
+        class with ``fn`` and attaching the other ``delay``, ``periodic`` and
+        ``name`` attributes to it as well.
         """
         bases = (cls,)
         name = fn.__name__
@@ -170,7 +170,7 @@ class PackagedTask(object):
 
     def instantiate(self):
         """
-        Yield a new instance of the stored py:class:`Task` class, or ``None``
+        Return a new instance of the stored py:class:`Task` class, or ``None``
         in case instantiation fails.
         """
         try:
@@ -193,8 +193,6 @@ class PackagedTask(object):
         """
         # mark the start of the task
         self._status = self.PROCESSING
-        # in case task instantation fails, make sure the finally clause won't
-        # be trying to access an undefined variable
         task_instance = self.instantiate()
         if not task_instance:
             return task_instance
