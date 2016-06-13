@@ -43,7 +43,7 @@ class TaskScheduler(object):
 
     def _execute(self, packaged_task):
         """
-        Delegate execution of ``packaged_task`` to py:meth:`~PackageTask.run`,
+        Delegate execution of ``packaged_task`` to py:meth:`~PackagedTask.run`,
         which handles the invocation of appropriate callbacks and errbacks and
         the resolving of the future object.
 
@@ -55,7 +55,8 @@ class TaskScheduler(object):
     def _periodic(self, packaged_task):
         """
         Execute a periodic task through py:meth:`~TaskScheduler._execute` and
-        reschedule it automatically for the specified ``delay``.
+        reschedule it automatically to run in the amount of time returned from
+        py:meth:`~Task.get_delay`.
         """
         task_instance = self._execute(packaged_task)
         if task_instance is None:
