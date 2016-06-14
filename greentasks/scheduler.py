@@ -48,29 +48,14 @@ class TaskScheduler(object):
         the resolving of the future object.
 
         The returned ``task_info`` structure is checked to see if the task has
-        to be retried or not, and do so if it needs to be.
+        to be retried or rescheduled (in case of periodic tasks) and does so if
+        any of the two is needed.
         """
         task_info = packaged_task.run()
-        # check if task needs to be retried
-        retry_delay = task_info.get('retry_delay', None)
-        if retry_delay is not None:
-            # reschedule task automatically to run in ``retry_delay`` seconds
-            self._async(retry_delay, self._execute, packaged_task)
-        return task_info
-
-    def _periodic(self, packaged_task):
-        """
-        Execute a periodic task through py:meth:`~TaskScheduler._execute` and
-        reschedule it automatically to run in the amount of time returned in
-        ``task_info``.
-        """
-        task_info = self._execute(packaged_task)
         delay = task_info.get('delay', None)
-        if delay is None:
-            # task cannot be be rescheduled again
-            return
-        # task needs to be rescheduled again
-        self._async(delay, self._periodic, packaged_task)
+        if delay is not None:
+            # schedule task to run in ``delay`` seconds
+            self._async(delay, self._execute, packaged_task)
 
     def _consume(self):
         """
@@ -147,11 +132,6 @@ class TaskScheduler(object):
             # early return with packaged task object to simplify flow
             return packaged_task
         # async task, order does not matter
-        if task_instance.periodic:
-            # schedule a periodic task
-            self._async(start_delay, self._periodic, packaged_task)
-        else:
-            # schedule a one-off task
-            self._async(start_delay, self._execute, packaged_task)
+        self._async(start_delay, self._execute, packaged_task)
         # return packaged task object in both cases
         return packaged_task

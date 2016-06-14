@@ -192,14 +192,19 @@ class PackagedTask(object):
                               "cannot be retried.",
                               self.name,
                               self.id)
-            return dict(retry_delay=None)
+            return dict(delay=None)
         else:
             # store the current calculated retry delay so it can be accessed by
             # the next task instance
             self._previous_retry_delay = delay
+            if delay is None:
+                # if no further retries are to be made, check if rescheduling
+                # is still needed though
+                return self._reschedule(task_instance)
+            # correct state to account for the currect retry
             self._retry_count += 1
             self._status = self.RETRY
-            return dict(retry_delay=delay)
+            return dict(delay=delay)
 
     def _reschedule(self, task_instance):
         """
@@ -221,6 +226,7 @@ class PackagedTask(object):
             # next task instance
             self._previous_delay = delay
             self._status = self.SCHEDULED
+            self._retry_count = 0
             return dict(delay=delay)
 
     def _failed(self, task_instance, exc):

@@ -141,7 +141,7 @@ def test__retry_fail(base_task_class):
     ptask = mod.PackagedTask(mock.Mock())
     task_instance = mock.Mock()
     task_instance.get_retry_delay.side_effect = Exception('test')
-    assert ptask._retry(task_instance) == dict(retry_delay=None)
+    assert ptask._retry(task_instance) == dict(delay=None)
     task_instance.get_retry_delay.assert_called_once_with(None, 0)
 
 
@@ -150,11 +150,29 @@ def test__retry_success(base_task_class):
     ptask = mod.PackagedTask(mock.Mock())
     task_instance = mock.Mock()
     retry_delay = task_instance.get_retry_delay.return_value
-    assert ptask._retry(task_instance) == dict(retry_delay=retry_delay)
+    assert ptask._retry(task_instance) == dict(delay=retry_delay)
     task_instance.get_retry_delay.assert_called_once_with(None, 0)
     assert ptask._previous_retry_delay == retry_delay
     assert ptask._retry_count == 1
     assert ptask._status == mod.PackagedTask.RETRY
+
+
+@mock.patch.object(mod.PackagedTask, '_reschedule')
+@mock.patch.object(mod.PackagedTask, 'base_task_class')
+def test__retry_exceeded(base_task_class, _reschedule):
+    ptask = mod.PackagedTask(mock.Mock())
+    ptask._previous_retry_delay = 10
+    ptask._retry_count = 2
+    ptask._status = mod.PackagedTask.FAILED
+    task_instance = mock.Mock()
+    task_instance.get_retry_delay.return_value = None
+    assert ptask._retry(task_instance) is _reschedule.return_value
+    task_instance.get_retry_delay.assert_called_once_with(10, 2)
+    _reschedule.assert_called_once_with(task_instance)
+    assert ptask._previous_retry_delay is None
+    # make sure state is not changed
+    assert ptask._retry_count == 2
+    assert ptask._status == mod.PackagedTask.FAILED
 
 
 @mock.patch.object(mod.PackagedTask, 'base_task_class')
@@ -169,12 +187,14 @@ def test__reschedule_fail(base_task_class):
 @mock.patch.object(mod.PackagedTask, 'base_task_class')
 def test__reschedule_success(base_task_class):
     ptask = mod.PackagedTask(mock.Mock())
+    ptask._retry_count = 3
     task_instance = mock.Mock()
     delay = task_instance.get_delay.return_value
     assert ptask._reschedule(task_instance) == dict(delay=delay)
     task_instance.get_delay.assert_called_once_with(None)
     assert ptask._previous_delay == delay
     assert ptask._status == mod.PackagedTask.SCHEDULED
+    assert ptask._retry_count == 0
 
 
 @mock.patch.object(mod.PackagedTask, '_retry')
