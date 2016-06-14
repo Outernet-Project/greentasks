@@ -1,21 +1,7 @@
-try:
-    import __builtin__ as builtins
-except ImportError:
-    import builtins
-
 import mock
 import pytest
 
-original_import = builtins.__import__
-
-
-def py3_gevent_import(name, *args, **kwargs):
-    if name == 'gevent':
-        return mock.Mock()
-    return original_import(name, *args, **kwargs)
-
-with mock.patch.object(builtins, '__import__', side_effect=py3_gevent_import):
-    from greentasks import scheduler as mod
+from greentasks import scheduler as mod
 
 
 @pytest.fixture
@@ -23,81 +9,29 @@ def scheduler():
     return mod.TaskScheduler()
 
 
-@mock.patch.object(mod.TaskScheduler, '_async')
-@mock.patch.object(mod.TaskScheduler, '_generate_task_id')
-def test_schedule_no_delay(_generate_task_id, _async, scheduler):
+@mock.patch.object(mod, 'spawn_later')
+def test__async(spawn_later, scheduler):
     fn = mock.Mock()
-    args = (1, 2)
-    kwargs = dict(a=3)
-    scheduler.schedule(fn, args=args, kwargs=kwargs)
-    expected = (fn, args, kwargs)
-    assert scheduler._queue[_generate_task_id.return_value] == expected
+    scheduler._async(10, fn, 1, 2, a=3, b=4)
+    spawn_later.assert_called_once_with(10, fn, 1, 2, a=3, b=4)
+
+
+@mock.patch.object(mod.TaskScheduler, '_async')
+def test__execute_no_delay(_async, scheduler):
+    packaged_task = mock.Mock()
+    packaged_task.run.return_value = {}
+    scheduler._execute(packaged_task)
+    assert packaged_task.run.called
     assert not _async.called
 
 
 @mock.patch.object(mod.TaskScheduler, '_async')
-@mock.patch.object(mod.TaskScheduler, '_generate_task_id')
-def test_schedule_delayed_oneoff(_generate_task_id, _async, scheduler):
-    fn = mock.Mock()
-    args = (1, 2)
-    kwargs = dict(a=3)
-    delay = 10
-    scheduler.schedule(fn, args=args, kwargs=kwargs, delay=delay)
-    _async.assert_called_once_with(delay,
-                                   scheduler._execute,
-                                   _generate_task_id.return_value,
-                                   fn,
-                                   args,
-                                   kwargs)
-
-
-@mock.patch.object(mod.TaskScheduler, '_async')
-@mock.patch.object(mod.TaskScheduler, '_generate_task_id')
-def test_schedule_delayed_periodic(_generate_task_id, _async, scheduler):
-    fn = mock.Mock()
-    args = (1, 2)
-    kwargs = dict(a=3)
-    delay = 10
-    scheduler.schedule(fn,
-                       args=args,
-                       kwargs=kwargs,
-                       delay=delay,
-                       periodic=True)
-    _async.assert_called_once_with(delay,
-                                   scheduler._periodic,
-                                   _generate_task_id.return_value,
-                                   fn,
-                                   args,
-                                   kwargs,
-                                   delay)
-
-
-def test__execute(scheduler):
-    fn = mock.Mock()
-    args = (1, 2)
-    kwargs = dict(a=3)
-    scheduler._execute('taskid', fn, args, kwargs)
-    fn.assert_called_once_with(*args, **kwargs)
-
-
-@mock.patch.object(mod.TaskScheduler, '_async')
-@mock.patch.object(mod.TaskScheduler, '_execute')
-def test__periodic(_execute, _async, scheduler):
-    task_id = 'taskid'
-    fn = mock.Mock()
-    args = (1, 2)
-    kwargs = dict(a=3)
-    delay = 10
-    scheduler._periodic(task_id, fn, args, kwargs, delay)
-    _execute.assert_called_once_with(task_id, fn, args, kwargs)
-    # make sure periodic task reschedules itself after it's execution
-    _async.assert_called_once_with(delay,
-                                   scheduler._periodic,
-                                   task_id,
-                                   fn,
-                                   args,
-                                   kwargs,
-                                   delay)
+def test__execute_with_delay(_async, scheduler):
+    packaged_task = mock.Mock()
+    packaged_task.run.return_value = {'delay': 10}
+    scheduler._execute(packaged_task)
+    assert packaged_task.run.called
+    _async.assert_called_once_with(10, scheduler._execute, packaged_task)
 
 
 @mock.patch.object(mod.TaskScheduler, '_async')
@@ -112,21 +46,92 @@ def test__consume_empty_queue(_execute, _async, scheduler):
 @mock.patch.object(mod.TaskScheduler, '_async')
 @mock.patch.object(mod.TaskScheduler, '_execute')
 def test__consume_task_found(_execute, _async, scheduler):
-    fn = mock.Mock()
-    args = (1, 2)
-    kwargs = dict(a=3)
-    scheduler._queue['first'] = (fn, args, kwargs)
-    scheduler._queue['second'] = (1, 2, 3)
+    first_task = mock.Mock()
+    second_task = mock.Mock()
+    scheduler._queue.put(first_task)
+    scheduler._queue.put(second_task)
     scheduler._consume()
-    _execute.assert_called_once_with('first', fn, args, kwargs)
+    _execute.assert_called_once_with(first_task)
     _async.assert_called_once_with(scheduler._consume_tasks_delay,
                                    scheduler._consume)
-    assert 'second' in scheduler._queue
+    assert scheduler._queue.peek() is second_task
 
 
-def test_get_status(scheduler):
-    scheduler._queue['waitingid'] = 1
-    scheduler.current_task = 'workingid'
-    scheduler.get_status('waitingid') == scheduler.QUEUED
-    scheduler.get_status('workingid') == scheduler.PROCESSING
-    scheduler.get_status('unknown') == scheduler.NOT_FOUND
+@mock.patch.object(mod.TaskScheduler, '_async')
+@mock.patch.object(mod.TaskScheduler, 'packaged_task_class')
+def test_schedule_instantiation_fails(packaged_task_class, _async, scheduler):
+    (fn, callback, errback) = (mock.Mock(), mock.Mock(), mock.Mock())
+    args = (1, 2)
+    kwargs = dict(a=3)
+    packaged_task_class.return_value.instantiate.return_value = None
+    with pytest.raises(mod.InvalidTaskError):
+        scheduler.schedule(fn,
+                           args=args,
+                           kwargs=kwargs,
+                           callback=callback,
+                           errback=errback)
+
+
+@mock.patch.object(mod.TaskScheduler, '_async')
+@mock.patch.object(mod.TaskScheduler, 'packaged_task_class')
+def test_schedule_no_delay(packaged_task_class, _async, scheduler):
+    (fn, callback, errback) = (mock.Mock(), mock.Mock(), mock.Mock())
+    args = (1, 2)
+    kwargs = dict(a=3)
+    task_instance = packaged_task_class.return_value.instantiate.return_value
+    task_instance.get_start_delay.return_value = None
+    ret = scheduler.schedule(fn,
+                             args=args,
+                             kwargs=kwargs,
+                             callback=callback,
+                             errback=errback)
+    packaged_task_class.assert_called_once_with(fn,
+                                                args=args,
+                                                kwargs=kwargs,
+                                                callback=callback,
+                                                errback=errback,
+                                                delay=None,
+                                                periodic=False,
+                                                retry_delay=None,
+                                                max_retries=0)
+    assert not _async.called
+    assert scheduler._queue.peek() is packaged_task_class.return_value
+    assert ret is packaged_task_class.return_value
+
+
+@mock.patch.object(mod.TaskScheduler, '_async')
+@mock.patch.object(mod.TaskScheduler, 'packaged_task_class')
+def test_schedule_delayed(packaged_task_class, _async, scheduler):
+    (fn, callback, errback) = (mock.Mock(), mock.Mock(), mock.Mock())
+    args = (1, 2)
+    kwargs = dict(a=3)
+    delay = 10
+    periodic = False
+    retry_delay = 5
+    max_retries = 3
+    task_instance = packaged_task_class.return_value.instantiate.return_value
+    task_instance.get_start_delay.return_value = delay
+    task_instance.periodic = periodic
+    ret = scheduler.schedule(fn,
+                             args=args,
+                             kwargs=kwargs,
+                             callback=callback,
+                             errback=errback,
+                             delay=delay,
+                             periodic=periodic,
+                             retry_delay=retry_delay,
+                             max_retries=max_retries)
+    packaged_task_class.assert_called_once_with(fn,
+                                                args=args,
+                                                kwargs=kwargs,
+                                                callback=callback,
+                                                errback=errback,
+                                                delay=delay,
+                                                periodic=periodic,
+                                                retry_delay=retry_delay,
+                                                max_retries=max_retries)
+    _async.assert_called_once_with(delay,
+                                   scheduler._execute,
+                                   packaged_task_class.return_value)
+    assert scheduler._queue.empty()
+    assert ret is packaged_task_class.return_value
