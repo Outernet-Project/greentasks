@@ -18,7 +18,7 @@ setup(
     url='https://github.com/Outernet-Project/greentasks',
     long_description=read('README.rst'),
     packages=find_packages(),
-    install_required=['gevent'],
+    install_requires=['gevent'],
     classifiers=[
         'Development Status :: 5 - Production/Stable',
         'License :: OSI Approved :: BSD License',
