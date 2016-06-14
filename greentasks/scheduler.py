@@ -1,6 +1,7 @@
 from gevent import spawn_later
 from gevent.queue import Queue, Empty as QueueEmpty
 
+from .exceptions import InvalidTaskError
 from .tasks import PackagedTask, Task
 
 
@@ -28,6 +29,9 @@ class TaskScheduler(object):
 
     #: Base class used to implement the actual task logic
     base_task_class = Task
+
+    #: Exception aliases
+    InvalidTaskError = InvalidTaskError
 
     def __init__(self, consume_tasks_delay=1):
         self._queue = Queue()
@@ -123,7 +127,7 @@ class TaskScheduler(object):
         task_instance = packaged_task.instantiate()
         if not task_instance:
             # instantiation failed, task is not runnable
-            return
+            raise InvalidTaskError("Task cannot be instantiated.")
         # get start delay (if any)
         start_delay = task_instance.get_start_delay()
         if start_delay is None:

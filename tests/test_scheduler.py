@@ -64,12 +64,12 @@ def test_schedule_instantiation_fails(packaged_task_class, _async, scheduler):
     args = (1, 2)
     kwargs = dict(a=3)
     packaged_task_class.return_value.instantiate.return_value = None
-    ret = scheduler.schedule(fn,
-                             args=args,
-                             kwargs=kwargs,
-                             callback=callback,
-                             errback=errback)
-    assert ret is None
+    with pytest.raises(mod.InvalidTaskError):
+        scheduler.schedule(fn,
+                           args=args,
+                           kwargs=kwargs,
+                           callback=callback,
+                           errback=errback)
 
 
 @mock.patch.object(mod.TaskScheduler, '_async')
