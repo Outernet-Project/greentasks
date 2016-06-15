@@ -1,31 +1,29 @@
 import os
 from setuptools import setup, find_packages
 
-import greentasks as pkg
-
 
 def read(fname):
     """ Return content of specified file """
     return open(os.path.join(os.path.dirname(__file__), fname)).read()
 
 
-VERSION = pkg.__version__
-
 setup(
     name='greentasks',
-    version=VERSION,
+    description=('A simple task scheduler, built on top of gevent.'),
+    keywords='asynchronous task scheduler',
+    version='1.1',
+    author='Outernet Inc',
+    author_email='apps@outernet.is',
     license='BSD',
-    packages=[pkg.__name__],
-    include_package_data=True,
+    url='https://github.com/Outernet-Project/greentasks',
     long_description=read('README.rst'),
-    install_requires=[
-        'gevent',
-    ],
+    packages=find_packages(),
+    install_requires=['gevent'],
     classifiers=[
-        'Development Status :: 4 - Beta',
-        'Topic :: Utilities',
-        'License :: OSI Approved :: GNU General Public License v3 (GPLv3)',
+        'Development Status :: 5 - Production/Stable',
+        'License :: OSI Approved :: BSD License',
         'Programming Language :: Python :: 2.7',
-        'Programming Language :: Python :: 3.4',
+        'Programming Language :: Python :: 3',
+        'Topic :: Utilities',
     ],
 )
