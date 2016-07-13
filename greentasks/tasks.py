@@ -204,6 +204,11 @@ class PackagedTask(object):
             # correct state to account for the currect retry
             self._retry_count += 1
             self._status = self.RETRY
+            logging.debug("Task[%s][%s] retry #%s will run in %s seconds.",
+                          self.name,
+                          self.id,
+                          self._retry_count,
+                          delay)
             return dict(delay=delay)
 
     def _reschedule(self, task_instance):
@@ -213,6 +218,9 @@ class PackagedTask(object):
         to indicate that the task is rescheduled. If the query fails, return
         appropriate information to indicate that the task can't be rescheduled.
         """
+        if not task_instance.periodic:
+            return dict(delay=None)
+        # it is a periodic task, query delay
         try:
             delay = task_instance.get_delay(self._previous_delay)
         except Exception:
@@ -222,6 +230,10 @@ class PackagedTask(object):
                               self.id)
             return dict(delay=None)
         else:
+            logging.debug("Task[%s][%s] rescheduled to run in %s seconds.",
+                          self.name,
+                          self.id,
+                          delay)
             # store the current calculated delay so it can be accessed by the
             # next task instance
             self._previous_delay = delay
@@ -296,9 +308,9 @@ class PackagedTask(object):
                               self.id)
             return self._failed(task_instance, exc)
         else:
-            logging.info("Task[%s][%s] execution finished.",
-                         self.name,
-                         self.id)
+            logging.debug("Task[%s][%s] execution finished.",
+                          self.name,
+                          self.id)
             return self._finished(task_instance, ret_val)
 
     def __hash__(self):

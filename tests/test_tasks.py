@@ -197,6 +197,15 @@ def test__reschedule_success(base_task_class):
     assert ptask._retry_count == 0
 
 
+@mock.patch.object(mod.PackagedTask, 'base_task_class')
+def test__reschedule_not_needed(base_task_class):
+    ptask = mod.PackagedTask(mock.Mock())
+    task_instance = mock.Mock()
+    task_instance.periodic = False
+    assert ptask._reschedule(task_instance) == dict(delay=None)
+    assert not task_instance.get_delay.called
+
+
 @mock.patch.object(mod.PackagedTask, '_retry')
 @mock.patch.object(mod.PackagedTask, 'base_task_class')
 @mock.patch.object(mod.PackagedTask, 'future_class')
