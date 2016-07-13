@@ -213,6 +213,9 @@ class PackagedTask(object):
         to indicate that the task is rescheduled. If the query fails, return
         appropriate information to indicate that the task can't be rescheduled.
         """
+        if not task_instance.periodic:
+            return dict(delay=None)
+        # it is a periodic task, query delay
         try:
             delay = task_instance.get_delay(self._previous_delay)
         except Exception:
