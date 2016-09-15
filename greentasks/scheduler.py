@@ -1,3 +1,5 @@
+import multiprocessing
+
 from gevent import spawn_later
 from gevent.queue import Queue, Empty as QueueEmpty
 
@@ -23,6 +25,9 @@ class TaskScheduler(object):
     the scheduler. In each wakeup, exactly one task will be processed.
 
     Failing tasks are retried if the task implementation allows to do so.
+
+    The ``multiprocessing`` flag controls whether tasks will be executed in
+    all processes, or just the main one.
     """
     #: Wrapper class enclosing all the data needed for a single task
     packaged_task_class = PackagedTask
@@ -33,10 +38,11 @@ class TaskScheduler(object):
     #: Exception aliases
     InvalidTaskError = InvalidTaskError
 
-    def __init__(self, consume_tasks_delay=1):
+    def __init__(self, consume_tasks_delay=1, multiprocessing=True):
         self._queue = Queue()
         self._consume_tasks_delay = consume_tasks_delay
         self._async(self._consume_tasks_delay, self._consume)
+        self._multiprocessing = multiprocessing
 
     def _async(self, delay, fn, *args, **kwargs):
         """
@@ -55,6 +61,14 @@ class TaskScheduler(object):
         to be retried or rescheduled (in case of periodic tasks) and does so if
         any of the two is needed.
         """
+        if not self._multiprocessing:
+            # in case multiprocessing is disabled, do not allow running tasks
+            # from processes other than the main process
+            current_proc = multiprocessing.current_process()
+            if type(current_proc) is multiprocessing.Process:
+                # this is a child / forked process, bail
+                return
+        # multiprocessing is either allowed or it's the main process, proceed
         task_info = packaged_task.run()
         delay = task_info.get('delay', None)
         if delay is not None:
