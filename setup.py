@@ -11,7 +11,7 @@ setup(
     name='greentasks',
     description=('A simple task scheduler, built on top of gevent.'),
     keywords='asynchronous task scheduler',
-    version='2.0.post1',
+    version='2.0.post2',
     author='Outernet Inc',
     author_email='apps@outernet.is',
     license='BSD',
